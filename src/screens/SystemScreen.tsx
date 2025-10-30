@@ -38,7 +38,14 @@ import {
   Settings,
   Shield,
   Monitor,
-  Globe
+  Globe,
+  Volume2,
+  VolumeX,
+  Sun,
+  Moon,
+  Type,
+  Plus,
+  Minus,
 } from 'lucide-react';
 
 // ==================== INTERFACES & TYPES ====================
@@ -47,14 +54,16 @@ interface SensorData {
   timestamp: number;
   time: string;
   temperatura: number;
-  pressaoEntrada: number;      // NOVO - era fluxoAr
-  pressaoSaida1: number;        // NOVO
-  pressaoSaida2: number;        // NOVO
+  pressaoEntrada: number;
+  pressaoSaida1: number;
+  pressaoSaida2: number;
   comutacaoValvula: number;
-  bobinaUtilizada: string;      // NOVO
-  situacaoAtuador: string;      // NOVO
+  bobinaUtilizada: string;
+  situacaoAtuador: string;
+  tempoComutacao: number;  // ✅ ADICIONAR ESTA LINHA
   status: 'normal' | 'warning' | 'error';
 }
+
 
 interface ExternalMessageFormat {
   parsed: {
@@ -221,11 +230,11 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
   const [customUrl, setCustomUrl] = useState('');
   // modificacao
   const [currentBobinaState, setCurrentBobinaState] = useState({
-  bobinaUtilizada: 'Esquerda',
+  bobinaUtilizada: 'esquerda',
   situacaoAtuador: 'retraído',
   lastUpdateTime: Date.now()
   });
-  const [bobinaDelayActive, setBobinaDelayActive] = useState(false);
+  //const [bobinaDelayActive, setBobinaDelayActive] = useState(false);
   // modificacao
 
   const [wsConfig, setWsConfig] = useState(WS_CONFIG);
@@ -258,7 +267,7 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
   const alertTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // modificacao
-  const bobinaDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  //const bobinaDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // modificacao
 
   // Contadores e métricas
@@ -294,53 +303,41 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
       return newLogs;
     });
   }, [generateDebugId]);
-  const handleBobinaUpdate = useCallback((newBobina: string, newSituacao: string) => {
+      const handleBobinaUpdate = useCallback((newBobina: string, newSituacao: string) => {
       const currentTime = Date.now();
       
       // Verifica se houve mudança na bobina ou situação
-      const hasChanged = currentBobinaState.bobinaUtilizada !== newBobina || 
-                        currentBobinaState.situacaoAtuador !== newSituacao;
+      const hasChanged = 
+        currentBobinaState.bobinaUtilizada !== newBobina || 
+        currentBobinaState.situacaoAtuador !== newSituacao;
       
-      if (hasChanged && !bobinaDelayActive) {
-        // Ativa o delay e mantém valores antigos
-        setBobinaDelayActive(true);
+      if (hasChanged) {
+        // ✅ ATUALIZAÇÃO IMEDIATA - SEM DELAY
+        setCurrentBobinaState({
+          bobinaUtilizada: newBobina,
+          situacaoAtuador: newSituacao,
+          lastUpdateTime: currentTime
+        });
         
         addDebugLog('DATA', 
-          `🕐 Delay de 10s ativado para mudança de bobina: ${currentBobinaState.bobinaUtilizada} → ${newBobina}`,
-          { oldBobina: currentBobinaState.bobinaUtilizada, newBobina, oldSituacao: currentBobinaState.situacaoAtuador, newSituacao }
+          `🔄 Bobina atualizada IMEDIATAMENTE: ${newBobina}`,
+          { 
+            oldBobina: currentBobinaState.bobinaUtilizada,
+            newBobina,
+            oldSituacao: currentBobinaState.situacaoAtuador,
+            newSituacao,
+            updateTime: currentTime,
+            delayRemoved: true
+          }
         );
-        
-        // Limpa timeout anterior se existir
-        if (bobinaDelayTimeoutRef.current) {
-          clearTimeout(bobinaDelayTimeoutRef.current);
-        }
-        
-        // Aplica o delay de 10 segundos
-        bobinaDelayTimeoutRef.current = setTimeout(() => {
-          setCurrentBobinaState({
-            bobinaUtilizada: newBobina,
-            situacaoAtuador: newSituacao,
-            lastUpdateTime: currentTime
-          });
-          setBobinaDelayActive(false);
-          
-          addDebugLog('DATA', 
-            `✅ Delay concluído - Bobina atualizada para: ${newBobina}`,
-            { finalBobina: newBobina, finalSituacao: newSituacao }
-          );
-          
-          bobinaDelayTimeoutRef.current = null;
-        }, 10000); // 10 segundos
-        
-      } else if (!hasChanged) {
+      } else {
         // Atualiza apenas o timestamp se não houve mudança
         setCurrentBobinaState(prev => ({
           ...prev,
           lastUpdateTime: currentTime
         }));
       }
-    }, [currentBobinaState, bobinaDelayActive, addDebugLog]);
-
+    }, [currentBobinaState, addDebugLog]);
   // ========== URL MANAGEMENT ==========
   const getCurrentWebSocketUrl = useCallback((): string => {
     const currentUrl = wsConfig.urls[wsConfig.currentUrlIndex];
@@ -377,7 +374,7 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
     updateConnectionMetrics({ currentUrl: nextUrl });
     return true;
   }, [wsConfig, addDebugLog]);
-
+  
   const addCustomUrl = useCallback((newUrl: string) => {
     if (!newUrl.trim() || !newUrl.startsWith('ws://') && !newUrl.startsWith('wss://')) {
       addDebugLog('ERROR', 'Invalid WebSocket URL format', { url: newUrl }, 'error');
@@ -407,7 +404,7 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
       addDebugLog("ERROR", "Mensagem recebida não é um objeto, descartando.", { type: typeof externalMsg }, "warning");
       return null;
     }
-
+    
     // ==================== INÍCIO DA MODIFICAÇÃO ====================
     // NOVO CENÁRIO (ALTA PRIORIDADE): Payload é uma string na raiz
     // Trata a estrutura vinda do Node-RED: { payload: "...", _msgid: "..." }
@@ -432,6 +429,77 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
       }
     }
     // ===================== FIM DA MODIFICAÇÃO ======================
+    // ==================== SPEECH SYNTHESIS HOOK ====================
+const useSpeechSynthesis = () => {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isEnabled, setIsEnabled] = useState(true);
+  const speechQueueRef = useRef<string[]>([]);
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  
+  const createUtterance = useCallback((text: string): SpeechSynthesisUtterance => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.8;
+    
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      currentUtteranceRef.current = null;
+      processNextInQueue();
+    };
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      currentUtteranceRef.current = null;
+      processNextInQueue();
+    };
+    
+    return utterance;
+  }, []);
+  
+  const processNextInQueue = useCallback(() => {
+    if (speechQueueRef.current.length > 0 && !currentUtteranceRef.current) {
+      const nextText = speechQueueRef.current.shift();
+      if (nextText && window.speechSynthesis && isEnabled) {
+        const utterance = createUtterance(nextText);
+        currentUtteranceRef.current = utterance;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+  }, [createUtterance, isEnabled]);
+  
+  const speak = useCallback((text: string) => {
+    if (!window.speechSynthesis || !isEnabled) return;
+    
+    if (currentUtteranceRef.current) {
+      window.speechSynthesis.cancel();
+      currentUtteranceRef.current = null;
+      speechQueueRef.current = [];
+    }
+    
+    speechQueueRef.current.push(text);
+    processNextInQueue();
+  }, [processNextInQueue, isEnabled]);
+  
+  const stopSpeaking = useCallback(() => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      speechQueueRef.current = [];
+      currentUtteranceRef.current = null;
+      setIsSpeaking(false);
+    }
+  }, []);
+  
+  const toggleEnabled = useCallback(() => {
+    setIsEnabled(prev => {
+      if (prev && isSpeaking) stopSpeaking();
+      return !prev;
+    });
+  }, [isSpeaking, stopSpeaking]);
+  
+  return { speak, stopSpeaking, isSpeaking, isEnabled, toggleEnabled };
+};
 
     // Cenário 1: Formato legado (Node-RED com wrapper "parsed.payload")
     // (Mantendo por robustez, caso o formato mude)
@@ -643,7 +711,7 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
         comutacaoValvula: (() => {
           const bobinaUtilizada = String(parsed.bobinaUtilizada || '').toLowerCase();
           const situacaoAtuador = String(parsed.situacaoAtuador || '').toLowerCase();
-
+          
           if (bobinaUtilizada === 'direita' || bobinaUtilizada === 'esquerda') return 1;
           if (situacaoAtuador === 'avançado' || situacaoAtuador === 'ativo') return 1;
           if (parsed.tempoComutacao && parsed.tempoComutacao > 0) return 1;
@@ -679,35 +747,37 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
 
       // SUBSTITUIR (aproximadamente linha 715-730)
       const sensorData: SensorData = {
-        timestamp: normalizedData.timestamp,
-        time: new Date(normalizedData.timestamp).toLocaleTimeString('pt-BR', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        }),
-        temperatura: normalizedData.temperatura,
-        pressaoEntrada: normalizedData.pressaoEntrada,   // NOVO
-        pressaoSaida1: normalizedData.pressaoSaida1,     // NOVO
-        pressaoSaida2: normalizedData.pressaoSaida2,     // NOVO
-        comutacaoValvula: normalizedData.comutacaoValvula,
-        bobinaUtilizada: currentBobinaState.bobinaUtilizada,     // NOVO
-        situacaoAtuador: currentBobinaState.situacaoAtuador,     // NOVO
-        // SUBSTITUIR (linha 724-741 aproximadamente)
-        status: (() => {
-          const qualidade = normalizedData.qualidade.toLowerCase();
-          const situacao = currentBobinaState.situacaoAtuador.toLowerCase();
-          
-          // Determinar status baseado na qualidade e situação
-          if (qualidade === 'normal' && situacao === 'avançado') return 'normal';  // ✅ lowercase
-          if (qualidade === 'warning' || situacao.includes('alerta')) return 'warning';  // ✅ lowercase
-          if (qualidade === 'error' || situacao.includes('erro') || situacao.includes('falha')) return 'error';  // ✅ lowercase
-          
-          // Default baseado na qualidade
-          return normalizedData.qualidade === 'normal' ? 'normal' : 'warning';  // ✅ lowercase
-        })()
-      };
-      handleBobinaUpdate(normalizedData.bobinaUtilizada, normalizedData.situacaoAtuador);
+  timestamp: normalizedData.timestamp,
+  time: new Date(normalizedData.timestamp).toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }),
+  temperatura: normalizedData.temperatura,
+  pressaoEntrada: normalizedData.pressaoEntrada,
+  pressaoSaida1: normalizedData.pressaoSaida1,
+  pressaoSaida2: normalizedData.pressaoSaida2,
+  comutacaoValvula: normalizedData.comutacaoValvula,
+  
+  // ✅ USAR OS DADOS ATUALIZADOS (não os fixos do currentBobinaState)
+  bobinaUtilizada: normalizedData.bobinaUtilizada,
+  situacaoAtuador: normalizedData.situacaoAtuador,
+  tempoComutacao: normalizedData.tempoComutacao || 0,  // ✅ ADICIONAR ESTA LINHA
+  
+  status: (() => {
+    const qualidade = normalizedData.qualidade.toLowerCase();
+    const situacao = normalizedData.situacaoAtuador.toLowerCase();
+    
+    if (qualidade === 'normal' && situacao.includes('avançado')) return 'normal';
+    if (qualidade === 'warning' || situacao.includes('alerta')) return 'warning';
+    if (qualidade === 'error' || situacao.includes('erro') || situacao.includes('falha')) return 'error';
+    
+    return normalizedData.qualidade === 'normal' ? 'normal' : 'warning';
+  })()
+};
 
+// ✅ ATUALIZAR ESTADO DA BOBINA COM DADOS RECEBIDOS
+handleBobinaUpdate(normalizedData.bobinaUtilizada, normalizedData.situacaoAtuador);
       // Performance tracking
       const processingTime = performance.now() - startTime;
       if (processingTime > 20) {
@@ -857,7 +927,7 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
     messageQueueRef.current = [];
 
     addDebugLog('PERFORMANCE', `⚡ Processing Node-RED flat batch: ${batchSize} messages`);
-
+    
     setSensorData(prevData => {
       const updatedData = [...prevData, ...batchData];
       const limitedData = updatedData.slice(-wsConfig.maxDataPoints);
@@ -1103,6 +1173,106 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
     switchToNextUrl,
     wsConfig
   ]);
+  // ==================== SPEECH SYNTHESIS HOOK ====================
+const useSpeechSynthesis = () => {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isEnabled, setIsEnabled] = useState(true);
+  const speechQueueRef = useRef<string[]>([]);
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  
+  const createUtterance = useCallback((text: string): SpeechSynthesisUtterance => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.8;
+    
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      currentUtteranceRef.current = null;
+      processNextInQueue();
+    };
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      currentUtteranceRef.current = null;
+      processNextInQueue();
+    };
+    
+    return utterance;
+  }, []);
+  
+  const processNextInQueue = useCallback(() => {
+    if (speechQueueRef.current.length > 0 && !currentUtteranceRef.current) {
+      const nextText = speechQueueRef.current.shift();
+      if (nextText && window.speechSynthesis && isEnabled) {
+        const utterance = createUtterance(nextText);
+        currentUtteranceRef.current = utterance;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+  }, [createUtterance, isEnabled]);
+  
+  const speak = useCallback((text: string) => {
+    if (!window.speechSynthesis || !isEnabled) return;
+    
+    if (currentUtteranceRef.current) {
+      window.speechSynthesis.cancel();
+      currentUtteranceRef.current = null;
+      speechQueueRef.current = [];
+    }
+    
+    speechQueueRef.current.push(text);
+    processNextInQueue();
+  }, [processNextInQueue, isEnabled]);
+  
+  const stopSpeaking = useCallback(() => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      speechQueueRef.current = [];
+      currentUtteranceRef.current = null;
+      setIsSpeaking(false);
+    }
+  }, []);
+  
+  const toggleEnabled = useCallback(() => {
+    setIsEnabled(prev => {
+      if (prev && isSpeaking) stopSpeaking();
+      return !prev;
+    });
+  }, [isSpeaking, stopSpeaking]);
+  
+  return { speak, stopSpeaking, isSpeaking, isEnabled, toggleEnabled };
+};
+// ========== INTEGRAÇÃO NO COMPONENTE ==========
+const { speak, stopSpeaking, isSpeaking, isEnabled: speechEnabled, toggleEnabled: toggleSpeechEnabled } = useSpeechSynthesis();
+
+const announceMetricCards = useCallback((currentData: SensorData, dataStatistics: any) => {
+  if (!currentData || !speechEnabled) return;
+  
+  const announcements: string[] = [];
+  
+  announcements.push(`Temperatura: ${currentData.temperatura.toFixed(1)} graus Celsius`);
+  if (dataStatistics?.avgTemp) {
+    announcements.push(`Média: ${dataStatistics.avgTemp} graus`);
+  }
+  
+  announcements.push(`Pressão de Entrada: ${currentData.pressaoEntrada.toFixed(2)} bar`);
+  if (dataStatistics?.avgPressaoEntrada) {
+    announcements.push(`Média: ${dataStatistics.avgPressaoEntrada} bar`);
+  }
+  
+  announcements.push(`Pressão Saída Um: ${currentData.pressaoSaida1.toFixed(2)} bar`);
+  announcements.push(`Pressão Saída Dois: ${currentData.pressaoSaida2.toFixed(2)} bar`);
+  announcements.push(`Bobina da Válvula: ${currentData.bobinaUtilizada}`);
+  announcements.push(`Situação: ${currentData.situacaoAtuador}`);
+  announcements.push(`Tempo de Comutação: ${currentData.comutacaoValvula || 0} milissegundos`);
+  
+  const fullAnnouncement = announcements.join('. ');
+  speak(fullAnnouncement);
+  
+  addDebugLog('DATA', '🔊 Anunciando métricas dos cards', { totalCards: 6 });
+}, [speak, speechEnabled, addDebugLog]);
 
   // ========== PUBLIC METHODS ==========
   const reconnectManual = useCallback(() => {
@@ -1166,30 +1336,45 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
 
   // SUBSTITUIR (linhas 1262-1293)
 const handleTestData = useCallback(() => {
+  // ✅ DADOS MOCKADOS DINÂMICOS
+  const randomBobina = Math.random() > 0.5 ? "Direita" : "Esquerda";
+  const randomSituacao = Math.random() > 0.5 ? "Avançado" : "Retraído";
+  
   const testPayload: NodeRedPayload = {
     temperatura: 15 + Math.random() * 15,
     pressaoEntrada: 2.5 + Math.random() * 2.0,
     pressaoSaida1: 2.0 + Math.random() * 2.5,
     pressaoSaida2: 1.0 + Math.random() * 1.5,
-    situacaoAtuador: Math.random() > 0.5 ? "Avançado" : "Recuado",
-    bobinaUtilizada: Math.random() > 0.5 ? "Direita" : "Esquerda",
+    
+    // ✅ VALORES DINÂMICOS (não fixos)
+    situacaoAtuador: randomSituacao,
+    bobinaUtilizada: randomBobina,
+    
     tempoComutacao: Math.floor(Math.random() * 100),
     timestamp: Date.now(),
-    deviceId: "simulator_test",
+    deviceId: 'simulator-test',
     qualidade: Math.random() > 0.85 ? 'warning' : 'normal',
-    debug: { cycle: 0, eventFactor: 1, tempVariation: 0, pressureVariation: 0 }
+    debug: {
+      cycle: 0,
+      eventFactor: 1,
+      tempVariation: 0,
+      pressureVariation: 0
+    }
   };
 
+  console.log("🧪 TESTE - Enviando dados:", {
+    bobinaUtilizada: testPayload.bobinaUtilizada,
+    situacaoAtuador: testPayload.situacaoAtuador
+  });
+
   const testData = processArduinoMessage(testPayload);
-  
-  if(testData) {
+  if (testData) {
     messageQueueRef.current.push(testData);
     processBatch();
-    addDebugLog('DATA', '🧪 Test data processed (simulating Node-RED flat object)', testData);
-  } else {
-    addDebugLog('ERROR', 'Failed to process test data', testPayload, 'error');
+    addDebugLog('DATA', `🧪 Test data: ${randomBobina}/${randomSituacao}`, testData);
   }
 }, [processArduinoMessage, processBatch, addDebugLog]);
+
 
   const handleClearLogs = useCallback(() => {
     setDebugLogs([]);
@@ -1290,10 +1475,10 @@ const handleTestData = useCallback(() => {
       
       if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
       if (alertTimeoutRef.current) clearTimeout(alertTimeoutRef.current);
-      if (bobinaDelayTimeoutRef.current) clearTimeout(bobinaDelayTimeoutRef.current);
+      //if (bobinaDelayTimeoutRef.current) clearTimeout(bobinaDelayTimeoutRef.current);
     };
   }, [connectWebSocket, processBatch, closeConnection, wsConfig.batchIntervalMs]);
-
+  const [fontSize, setFontSize] = useState(16);
   useEffect(() => {
     addDebugLog('CONFIG', 
       `🔧 Node-RED WebSocket configuration updated`,
@@ -1310,45 +1495,116 @@ const handleTestData = useCallback(() => {
   // ========== STYLES ==========
   const styles = `
     :root {
-      --bg: ${darkMode ? '#000000' : '#ffffff'};
-      --panel: ${darkMode ? '#0a0a0a' : '#f8fafc'};
-      --card: ${darkMode ? '#1a1a1a' : '#ffffff'};
-      --text: ${darkMode ? '#ffffff' : '#1f2937'};
-      --muted: ${darkMode ? '#9ca3af' : '#6b7280'};
-      --accent: #14b8a6;
-      --success: #22c55e;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --info: #3b82f6;
-      --border: ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'};
-      --shadow: ${darkMode ? '0 4px 20px rgba(0,0,0,0.8)' : '0 4px 20px rgba(0,0,0,0.1)'};
-      --gradient: ${darkMode ? 
-        'linear-gradient(135deg, #000000 0%, #1a1a1a 100%)' : 
-        'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'};
-    }
+    --base-font-size: ${fontSize}px;
+    --bg: ${darkMode ? '#000000' : '#ffffff'};
+    --panel: ${darkMode ? '#0a0a0a' : '#f8fafc'};
+    --card: ${darkMode ? '#1a1a1a' : '#ffffff'};
+    --text: ${darkMode ? '#ffffff' : '#1f2937'};
+    --muted: ${darkMode ? '#9ca3af' : '#6b7280'};
+    --accent: #14b8a6;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --info: #3b82f6;
+    --border: ${darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'};
+    --shadow: ${darkMode ? '0 4px 20px rgba(0,0,0,0.8)' : '0 4px 20px rgba(0,0,0,0.1)'};
+    --gradient: ${darkMode ? 
+    'linear-gradient(135deg, #000000 0%, #1a1a1a 100%)' : 
+    'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'};
 
     * { 
       box-sizing: border-box; 
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
-
-    html, body, #root { 
-      height: 100%; 
-      margin: 0; 
-      padding: 0; 
+    html {
+        font-size: var(--base-font-size);
+      }
+    body, #root { 
+      font-size: 1rem; /* Agora relativo ao --base-font-size */
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-      background: var(--bg); 
+      background: var(--bg);
       color: var(--text);
-      transition: background-color 0.3s ease, color 0.3s ease;
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      transition: all 0.3s ease;
     }
-
+    h1, h2, h3, h4, h5, h6, p, span, div, button, input {
+    font-size: inherit; /* Herda o font-size do pai */
+    }
+      /* ========== CONTROLES DE TEMA E FONTE ========== */
+    .theme-font-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .theme-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-size: calc(1rem * 0.85); /* 0.85x o font size base */
+      font-weight: 600;
+      color: var(--text);
+    }
+    .theme-toggle:hover {
+      background: var(--accent);
+      color: white;
+      transform: translateY(-2px);  
+    }
+    .font-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    }
+    .font-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      color: var(--text);
+      font-size: calc(1rem * 0.8); /* 0.8x o font size base */
+    }
+    .font-btn:hover:not(:disabled) {
+      background: var(--accent);
+      color: white;
+      transform: scale(1.1);  
+    } 
+    .font-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    }
+    .font-size-display {
+      font-size: calc(1rem * 0.8); /* 0.8x o font size base */
+      font-weight: 600;
+      color: var(--muted);
+      min-width: 30px;
+      text-align: center;
+      }
     .dashboard {
-      min-height: 100vh;
+       min-height: 100vh;
       background: var(--gradient);
-      display:flex;
-      flex-direction:column;
-      overflow:hidden;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 1rem; /* Base font size aplicado */
     }
 
     .header {
@@ -1389,9 +1645,9 @@ const handleTestData = useCallback(() => {
     }
 
     .brand-text h1 {
-      margin: 0;
-      font-size: 1.85rem;
+      font-size: calc(1rem * 1.85); /* 1.85x o font size base */
       font-weight: 800;
+      margin: 0;
       background: linear-gradient(135deg, var(--accent), #0d9488);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -1400,10 +1656,10 @@ const handleTestData = useCallback(() => {
     }
 
     .brand-text p {
-      margin: 6px 0 0 0;
-      color: var(--muted);
-      font-size: 1rem;
+      font-size: 1rem; /* Base font size */
       font-weight: 500;
+      color: var(--muted);
+      margin: 6px 0 0 0;
       opacity: 0.9;
     }
 
@@ -1421,7 +1677,7 @@ const handleTestData = useCallback(() => {
       align-items: center;
       gap: 12px;
       font-weight: 700;
-      font-size: 0.95rem;
+      font-size: calc(1rem * 0.95); /* 0.95x o font size base */
       background: var(--card);
       border: 2px solid var(--border);
       box-shadow: var(--shadow);
@@ -1492,7 +1748,7 @@ const handleTestData = useCallback(() => {
       border: none;
       cursor: pointer;
       font-weight: 700;
-      font-size: 0.9rem;
+      font-size: calc(1rem * 0.9); /* 0.9x o font size base */
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       text-decoration: none;
       background: var(--accent);
@@ -1560,6 +1816,7 @@ const handleTestData = useCallback(() => {
       overflow-y: auto;
       flex-grow: 1;
       -webkit-overflow-scrolling: touch;
+      font-size: inherit; /* Herda o font-size global */
     }
 
     .url-config {
@@ -1661,7 +1918,7 @@ const handleTestData = useCallback(() => {
     }
 
     .section-info h2 {
-      font-size: 1.6rem;
+      font-size: calc(1rem * 1.6); /* 1.6x o font size base */
       font-weight: 800;
       color: var(--text);
       margin: 0 0 8px 0;
@@ -1670,7 +1927,7 @@ const handleTestData = useCallback(() => {
 
     .section-info p {
       color: var(--muted);
-      font-size: 1rem;
+      font-size: 1rem; /* Base font size */
       margin: 0;
       font-weight: 500;
     }
@@ -1861,7 +2118,7 @@ const handleTestData = useCallback(() => {
     }
 
     .metric-value {
-      font-size: 2.6rem;
+      font-size: calc(1rem * 2.6); /* 2.6x o font size base */
       font-weight: 900;
       color: var(--text);
       margin: 12px 0;
@@ -1871,7 +2128,7 @@ const handleTestData = useCallback(() => {
 
     .metric-unit {
       color: var(--muted);
-      font-size: 1.1rem;
+      font-size: calc(1rem * 1.1); /* 1.1x o font size base */
       font-weight: 700;
       margin-left: 8px;
     }
@@ -1880,7 +2137,7 @@ const handleTestData = useCallback(() => {
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 0.9rem;
+      font-size: calc(1rem * 0.9); /* 0.9x o font size base */
       color: var(--success);
       font-weight: 600;
       margin-top: 8px;
@@ -1920,17 +2177,17 @@ const handleTestData = useCallback(() => {
     }
 
     .chart-title {
+      font-size: calc(1rem * 1.2); /* 1.2x o font size base */
+      font-weight: 700;
+      color: var(--text);
       display: flex;
       align-items: center;
       gap: 12px;
-      font-size: 1.2rem;
-      font-weight: 700;
-      color: var(--text);
     }
 
     .chart-meta {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: calc(1rem * 0.9); /* 0.9x o font size base */
       font-weight: 600;
       text-align: right;
     }
@@ -2031,6 +2288,7 @@ const handleTestData = useCallback(() => {
       gap: 16px;
       align-items: flex-start;
       transition: background-color 0.2s ease;
+      font-size: calc(1rem * 0.9); /* 0.9x o font size base */
     }
 
     .debug-entry:hover {
@@ -2073,6 +2331,7 @@ const handleTestData = useCallback(() => {
       color: var(--text);
       line-height: 1.5;
       font-weight: 500;
+      font-size: inherit;
     }
 
     .debug-data {
@@ -2331,12 +2590,58 @@ const handleTestData = useCallback(() => {
     }
     return null;
   });
+  // Toggle Dark/Light Mode
+  const toggleDarkMode = useCallback(() => {
+    setDarkMode(prev => {
+      const newMode = !prev;
+      localStorage.setItem('dashboard-dark-mode', JSON.stringify(newMode));
+      addDebugLog('CONFIG', 
+        `🎨 Tema alterado para: ${newMode ? 'Dark Mode' : 'Light Mode'}`,
+        { darkMode: newMode }
+      );
+      return newMode;
+    });
+  }, [addDebugLog]);
+
+  // Controle de tamanho da fonte
+  const increaseFontSize = useCallback(() => {
+    setFontSize(prev => {
+      const newSize = Math.min(prev + 2, 24); // Máximo 24px
+      localStorage.setItem('dashboard-font-size', JSON.stringify(newSize));
+      addDebugLog('CONFIG', 
+        `🔤 Fonte aumentada para: ${newSize}px`,
+        { fontSize: newSize }
+      );
+      return newSize;
+    });
+  }, [addDebugLog]);
+
+  const decreaseFontSize = useCallback(() => {
+    setFontSize(prev => {
+      const newSize = Math.max(prev - 2, 12); // Mínimo 12px
+      localStorage.setItem('dashboard-font-size', JSON.stringify(newSize));
+      addDebugLog('CONFIG', 
+        `🔤 Fonte diminuída para: ${newSize}px`,
+        { fontSize: newSize }
+      );
+      return newSize;
+    });
+  }, [addDebugLog]);
+
+  const resetFontSize = useCallback(() => {
+    setFontSize(16);
+    localStorage.setItem('dashboard-font-size', JSON.stringify(16));
+    addDebugLog('CONFIG', 
+      `🔤 Fonte resetada para tamanho padrão: 16px`,
+      { fontSize: 16 }
+    );
+  }, [addDebugLog]);
 
   // ========== RENDER ==========
   return (
     <div className="dashboard">
       <style>{styles}</style>
-
+    
       {/* Header */}
       <header className="header">
         <div className="header-inner">
@@ -2406,10 +2711,62 @@ const handleTestData = useCallback(() => {
               <AlertCircle size={16} />
               Limpar os Dados
             </button>
+            <div className="theme-font-controls">
+            {/* Toggle Dark/Light Mode */}
+            <div 
+              className="theme-toggle" 
+              onClick={toggleDarkMode}
+              title={darkMode ? 'Mudar para Light Mode' : 'Mudar para Dark Mode'}
+            >
+              {darkMode ? (
+                <>
+                  <Sun size={14} />
+                  Light
+                </>
+              ) : (
+                <>
+                  <Moon size={14} />
+                  Dark
+                </>
+              )}
+            </div>
+
+            {/* Controles de Fonte */}
+            <div className="font-controls">
+              <button 
+                className="font-btn"
+                onClick={decreaseFontSize}
+                disabled={fontSize <= 12}
+                title="Diminuir fonte"
+              >
+                <Minus size={12} />
+              </button>
+              
+              <div className="font-size-display">
+                {fontSize}
+              </div>
+              
+              <button 
+                className="font-btn"
+                onClick={increaseFontSize}
+                disabled={fontSize >= 24}
+                title="Aumentar fonte"
+              >
+                <Plus size={12} />
+              </button>
+              
+              <button 
+                className="font-btn"
+                onClick={resetFontSize}
+                title="Reset fonte"
+              >
+                <Type size={12} />
+              </button>
           </div>
         </div>
+        </div>
+        </div>
       </header>
-
       <div className="container">
         {/* WebSocket URL Configuration */}
         {showUrlConfig && (
@@ -2465,6 +2822,60 @@ const handleTestData = useCallback(() => {
             </div>
           </div>
           <div className="metrics-grid">
+            {/* CONTROLES DE SPEECH SYNTHESIS */}
+            <div style={{
+              gridColumn: '1 / -1',
+              display: 'flex',
+              justifyContent: 'center',
+              gap: '16px',
+              marginBottom: '20px',
+              padding: '16px',
+              background: 'var(--card)',
+              borderRadius: '16px',
+              border: '1px solid var(--border)',
+              boxShadow: 'var(--shadow)'
+            }}>
+              <button 
+                onClick={() => announceMetricCards(currentData, dataStatistics)}
+                className="btn"
+                disabled={isSpeaking || !currentData.temperatura}
+                style={{
+                  background: isSpeaking ? '#f59e0b' : '#14b8a6',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px'
+                }}
+              >
+                {isSpeaking ? (
+                  <>
+                    <VolumeX size={18} />
+                    Falando...
+                  </>
+                ) : (
+                  <>
+                    <Volume2 size={18} />
+                    🔊 Anunciar Métricas dos Cards
+                  </>
+                )}
+              </button>
+
+              <button 
+                onClick={toggleSpeechEnabled}
+                className={`btn ${speechEnabled ? 'btn-secondary' : 'btn-danger'}`}
+              >
+                {speechEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                {speechEnabled ? 'Speech ON' : 'Speech OFF'}
+              </button>
+
+              {isSpeaking && (
+                <button onClick={stopSpeaking} className="btn btn-warning">
+                  <VolumeX size={16} />
+                  Parar
+                </button>
+              )}
+            </div>
+
+            {/* CARDS EXISTENTES (mantém todos como estão) */}
             <MetricCard
               title="Temperatura"
               value={currentData.temperatura}
@@ -2550,8 +2961,6 @@ const handleTestData = useCallback(() => {
                 fontWeight: 700,
                 color: 'var(--text)'
               }}>
-                <Power size={20} color="#14b8a6" />
-                Estado Visual da Válvula
               </h3>
               
               <div style={{
@@ -2568,39 +2977,199 @@ const handleTestData = useCallback(() => {
                 overflow: 'hidden'
               }}>
                 {/* SUBSTITUA AS URLS ABAIXO PELOS SEUS GIFS */}
-                <video
-  autoPlay
-  loop
-  muted
-  playsInline                    // ✅ ESSENCIAL para iOS/Safari
-  preload="auto"                 // ✅ CARREGAMENTO OTIMIZADO
-  style={{
-    maxWidth: '100%',
-    maxHeight: '100%',
-    objectFit: 'contain'
-  }}
->
-  <source 
-    src={
-      currentData.bobinaUtilizada?.toLowerCase().includes('Direita') || 
-      currentData.situacaoAtuador?.toLowerCase().includes('avançado')
-        ? "/img/Direita.mp4"      // ✅ CAMINHO CORRETO
-        : "/img/Esquerda.mp4"     // ✅ CAMINHO CORRETO
-    } 
-    type="video/mp4" 
-  />
-  <source 
-    src={
-      currentData.bobinaUtilizada?.toLowerCase().includes('Direita') || 
-      currentData.situacaoAtuador?.toLowerCase().includes('avançado')
-        ? "/img/Direita.webm"     // ✅ FALLBACK OPCIONAL
-        : "/img/Esquerda.webm"    // ✅ FALLBACK OPCIONAL
-    } 
-    type="video/webm" 
-  />
-  Seu navegador não suporta reprodução de vídeos.
-</video>
-        </div>
+                {(() => {
+    // ========== DEBUG COMPLETO ==========
+    const isDireita = currentData.bobinaUtilizada?.toLowerCase().includes('direita');
+    const isAvancado = currentData.situacaoAtuador?.toLowerCase().includes('avançado');
+    const isRecuado = currentData.situacaoAtuador?.toLowerCase().includes('recuado') || 
+                      currentData.situacaoAtuador?.toLowerCase().includes('retraído');
+    
+    console.log("=== DEBUG VÍDEO COMPLETO ===");
+    console.log("bobinaUtilizada:", currentData.bobinaUtilizada);
+    console.log("situacaoAtuador:", currentData.situacaoAtuador);
+    console.log("isDireita:", isDireita);
+    console.log("isAvancado:", isAvancado);
+    console.log("isRecuado:", isRecuado);
+    // ========== PERSISTÊNCIA DE CONFIGURAÇÕES (Adicionar após linha ~1650) ==========
+    useEffect(() => {
+      // Carrega configurações salvas do localStorage
+      const savedDarkMode = localStorage.getItem('dashboard-dark-mode');
+      const savedFontSize = localStorage.getItem('dashboard-font-size');
+      
+      if (savedDarkMode !== null) {
+        setDarkMode(JSON.parse(savedDarkMode));
+      }
+      
+      if (savedFontSize !== null) {
+        setFontSize(JSON.parse(savedFontSize));
+      }
+      
+      addDebugLog('CONFIG', 
+        '⚙️ Configurações de tema e fonte carregadas',
+        { 
+          darkMode: savedDarkMode ? JSON.parse(savedDarkMode) : true,
+          fontSize: savedFontSize ? JSON.parse(savedFontSize) : 16
+        }
+      );
+    }, [addDebugLog]);
+
+    // Lógica de seleção do vídeo
+    const videoName = isDireita ? "Direita" : "Esquerda";
+    const statusText = `${videoName.toLowerCase()} | ${currentData.situacaoAtuador || 'retraído'}`;
+    
+    console.log("Vídeo selecionado:", videoName);
+    console.log("Status exibido:", statusText);
+    console.log("========================");
+  
+  return (
+    <div style={{ 
+      width: '100%', 
+      height: '400px',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      border: '2px solid #4ade80',
+      borderRadius: '16px',
+      backgroundColor: '#1e293b',
+      position: 'relative',
+      overflow: 'hidden'
+    }}>
+      {/* TÍTULO */}
+      <div style={{
+        position: 'absolute',
+        top: '16px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        color: '#4ade80',
+        fontSize: '18px',
+        fontWeight: 'bold',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px'
+      }}>
+        <Power size={24} />
+        Estado Visual da Válvula
+      </div>
+
+      {/* ÁREA DO VÍDEO */}
+      <div style={{
+        width: '90%',
+        height: '70%',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#000',
+        borderRadius: '8px',
+        position: 'relative'
+      }}>
+        <video
+          key={videoName} // Force re-render quando mudar
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain'
+          }}
+          onError={(e) => {
+            console.error(`❌ ERRO ao carregar vídeo ${videoName}:`, e);
+          }}
+          onLoadStart={() => {
+            console.log(`🎬 Iniciando carregamento: ${videoName}.mp4`);
+          }}
+          onCanPlay={() => {
+            console.log(`✅ Vídeo pronto: ${videoName}.mp4`);
+          }}
+        >
+          {/* Múltiplas tentativas de caminho */}
+          <source src={`/img/${videoName}.mp4`} type="video/mp4" />
+          <source src={`./img/${videoName}.mp4`} type="video/mp4" />
+          <source src={`/public/img/${videoName}.mp4`} type="video/mp4" />
+          <source src={`./public/img/${videoName}.mp4`} type="video/mp4" />
+          
+          {/* FALLBACK: Simulação visual com CSS */}
+          <div style={{
+            width: '100%',
+            height: '100%',
+            background: isDireita ? 
+              'linear-gradient(45deg, #dc2626, #ef4444)' : 
+              'linear-gradient(45deg, #2563eb, #3b82f6)',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            color: 'white',
+            fontSize: '24px',
+            fontWeight: 'bold',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            {/* Animação de movimento */}
+            <div style={{
+              width: '80px',
+              height: '20px',
+              backgroundColor: 'white',
+              borderRadius: '10px',
+              transform: isAvancado ? 'translateX(40px)' : 'translateX(-40px)',
+              transition: 'transform 0.8s ease-in-out',
+              marginBottom: '20px',
+              boxShadow: '0 4px 8px rgba(0,0,0,0.3)'
+            }} />
+            
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '20px', marginBottom: '8px' }}>
+                🔧 Simulação Visual
+              </div>
+              <div style={{ fontSize: '16px', opacity: 0.9 }}>
+                Válvula: {videoName}
+              </div>
+              <div style={{ fontSize: '14px', opacity: 0.7, marginTop: '4px' }}>
+                Estado: {currentData.situacaoAtuador || 'Retraído'}
+              </div>
+            </div>
+            
+            {/* Indicador de problema */}
+            <div style={{
+              position: 'absolute',
+              bottom: '10px',
+              right: '10px',
+              fontSize: '12px',
+              opacity: 0.6,
+              background: 'rgba(0,0,0,0.5)',
+              padding: '4px 8px',
+              borderRadius: '4px'
+            }}>
+              ⚠️ Vídeo não encontrado
+            </div>
+          </div>
+        </video>
+      </div>
+
+      {/* STATUS INFERIOR */}
+      <div style={{
+        position: 'absolute',
+        bottom: '16px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        color: '#4ade80',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        background: 'rgba(74, 222, 128, 0.1)',
+        padding: '8px 16px',
+        borderRadius: '20px',
+        border: '1px solid #4ade80'
+      }}>
+        {statusText}
+      </div>
+    </div>
+  );
+})()}
+              </div>
+              
               <div style={{
                 marginTop: '16px',
                 padding: '12px 20px',
@@ -2747,7 +3316,6 @@ const handleTestData = useCallback(() => {
                   </ResponsiveContainer>
                 </div>
               </div>
-
               {/* Gráfico Pressão Saída 1 */}
               <div className="chart-card">
                 <div className="chart-header">
@@ -2849,8 +3417,57 @@ const handleTestData = useCallback(() => {
                   </ResponsiveContainer>
                 </div>
               </div>
+              {/* Tempo de Comutação da Válvula */}
+<div className="chart-card">
+  <div className="chart-header">
+    <div className="chart-title">
+      <Clock size={20} color="#f59e0b" />
+      Tempo de Comutação da Válvula
+    </div>
+    <div className="chart-meta">
+      {sensorData.length} Amostras<br />
+      Média: {(sensorData.reduce((sum, d) => sum + d.tempoComutacao, 0) / sensorData.length).toFixed(1)}ms
+    </div>
+  </div>
+  <div className="chart-container">
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={sensorData}>
+        <defs>
+          <linearGradient id="comutacaoGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8} />
+            <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.3} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+        <XAxis 
+          dataKey="time" 
+          stroke="#9ca3af" 
+          fontSize={11}
+          axisLine={false}
+          tickLine={false}
+        />
+        <YAxis 
+          stroke="#9ca3af" 
+          fontSize={11}
+          axisLine={false}
+          tickLine={false}
+          label={{ value: 'Tempo (ms)', angle: -90, position: 'insideLeft' }}
+        />
+        <Tooltip content={<CustomTooltip />} />
+        <ReferenceLine y={50} stroke="#22c55e" strokeDasharray="5 5" label="Ótimo" />
+        <ReferenceLine y={100} stroke="#f59e0b" strokeDasharray="5 5" label="Limite" />
+        <Bar
+          dataKey="tempoComutacao"
+          fill="url(#comutacaoGradient)"
+          name="Tempo Comutação (ms)"
+          isAnimationActive={false}
+          radius={[8, 8, 0, 0]}
+        />
+      </BarChart>
+    </ResponsiveContainer>
+  </div>
+</div>
 
- 
               <LineChart data={sensorData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                 <XAxis 
@@ -2907,7 +3524,7 @@ const handleTestData = useCallback(() => {
             </div>
           )}
         </section>
-
+        
         {/* Debug Console */}
 <section className="debug-section">
   <div className="debug-console">
@@ -2925,7 +3542,7 @@ const handleTestData = useCallback(() => {
         </button>
       </div>
     </div>
-
+          
     <div className="debug-content">
       {debugLogs.length === 0 ? (
         <div className="empty-debug">
@@ -2958,6 +3575,7 @@ const handleTestData = useCallback(() => {
     </div>
   </div>
 </section>
+
       </div>
     </div>
   );
