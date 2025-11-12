@@ -2,6 +2,8 @@
 // Versão: 2.2 | Ajustado para estrutura flat Node-RED | Data: 2025-10-18
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   LineChart,
   Line,
@@ -46,6 +48,8 @@ import {
   Type,
   Plus,
   Minus,
+  Download,
+  FileText,
 } from 'lucide-react';
 
 // ==================== INTERFACES & TYPES ====================
@@ -54,16 +58,14 @@ interface SensorData {
   timestamp: number;
   time: string;
   temperatura: number;
-  pressaoEntrada: number;
-  pressaoSaida1: number;
-  pressaoSaida2: number;
+  pressaoEntrada: number;      // NOVO - era fluxoAr
+  pressaoSaida1: number;        // NOVO
+  pressaoSaida2: number;        // NOVO
   comutacaoValvula: number;
-  bobinaUtilizada: string;
-  situacaoAtuador: string;
-  tempoComutacao: number;  // ✅ ADICIONAR ESTA LINHA
+  bobinaUtilizada: string;      // NOVO
+  situacaoAtuador: string;      // NOVO
   status: 'normal' | 'warning' | 'error';
 }
-
 
 interface ExternalMessageFormat {
   parsed: {
@@ -212,7 +214,7 @@ const SENSOR_VALIDATION_SCHEMA = {
   pressaoEntrada: { min: 0, max: 50, required: true, type: 'number' },      // ✅ CORRIGIDO (era fluxoAr)
   pressaoSaida1: { min: 0, max: 30, required: true, type: 'number' },       // ✅ NOVO
   pressaoSaida2: { min: 0, max: 30, required: false, type: 'number' },      // ✅ NOVO (opcional)
-  comutacaoValvula: { min: 0, max: 1, required: false, type: 'number' }
+  comutacaoValvula: { min: 8, max: 20, required: false, type: 'number' }
 };
 
 // ==================== COMPONENTE PRINCIPAL ====================
@@ -228,7 +230,9 @@ const EnterpriseIoTDashboard: React.FC = (): React.JSX.Element => {
   const [performanceMode, setPerformanceMode] = useState(true);
   const [showUrlConfig, setShowUrlConfig] = useState(false);
   const [customUrl, setCustomUrl] = useState('');
-  // modificacao
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isGeneratingCsv, setIsGeneratingCsv] = useState(false);
+  // modificaca
   const [currentBobinaState, setCurrentBobinaState] = useState({
   bobinaUtilizada: 'esquerda',
   situacaoAtuador: 'retraído',
@@ -712,9 +716,9 @@ const useSpeechSynthesis = () => {
           const bobinaUtilizada = String(parsed.bobinaUtilizada || '').toLowerCase();
           const situacaoAtuador = String(parsed.situacaoAtuador || '').toLowerCase();
           
-          if (bobinaUtilizada === 'direita' || bobinaUtilizada === 'esquerda') return 1;
-          if (situacaoAtuador === 'avançado' || situacaoAtuador === 'ativo') return 1;
-          if (parsed.tempoComutacao && parsed.tempoComutacao > 0) return 1;
+          if (bobinaUtilizada === 'direita' || bobinaUtilizada === 'esquerda') return parsed.tempoComutacao;
+          if (situacaoAtuador === 'avançado' || situacaoAtuador === 'ativo') return parsed.tempoComutacao;
+          //if (parsed.tempoComutacao && parsed.tempoComutacao > 0) return parsed.tempoComutacao;
           
           return 0;
         })(),
@@ -762,7 +766,6 @@ const useSpeechSynthesis = () => {
   // ✅ USAR OS DADOS ATUALIZADOS (não os fixos do currentBobinaState)
   bobinaUtilizada: normalizedData.bobinaUtilizada,
   situacaoAtuador: normalizedData.situacaoAtuador,
-  tempoComutacao: normalizedData.tempoComutacao || 0,  // ✅ ADICIONAR ESTA LINHA
   
   status: (() => {
     const qualidade = normalizedData.qualidade.toLowerCase();
@@ -1333,8 +1336,183 @@ const announceMetricCards = useCallback((currentData: SensorData, dataStatistics
     
     addDebugLog('DATA', '🗑️ All Node-RED sensor data cleared by user');
   }, [addDebugLog]);
+  // ... (depois da função handleSwitchUrl, por exemplo) ...
 
-  // SUBSTITUIR (linhas 1262-1293)
+  const handleGeneratePdf = useCallback(() => {
+    setIsGeneratingPdf(true);
+    addDebugLog('PERFORMANCE', 'Iniciando geração de PDF...', null, 'info');
+
+    const dataToExport = sensorData.slice(-20);
+
+    if (dataToExport.length === 0) {
+      addDebugLog('ERROR', 'Nenhum dado disponível para gerar PDF.', null, 'warning');
+      setIsGeneratingPdf(false);
+      return;
+    }
+
+    try {
+      const doc = new jsPDF();
+      const generationTime = new Date().toLocaleString('pt-BR');
+
+      // 1. Título e Personalização
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Relatório de Medições - Horizon-Solutions IoT', 14, 22);
+      
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Gerado em: ${generationTime}`, 14, 30);
+      doc.text(`Total de Medições: ${dataToExport.length} (Últimas 20 solicitadas)`, 14, 36);
+
+      // 2. Estatísticas Agregadas (Personalização)
+      const total = dataToExport.length;
+      const avgTemp = (dataToExport.reduce((sum, d) => sum + d.temperatura, 0) / total).toFixed(2);
+      const avgPIn = (dataToExport.reduce((sum, d) => sum + d.pressaoEntrada, 0) / total).toFixed(2);
+      const avgPOut1 = (dataToExport.reduce((sum, d) => sum + d.pressaoSaida1, 0) / total).toFixed(2);
+      const avgPOut2 = (dataToExport.reduce((sum, d) => sum + d.pressaoSaida2, 0) / total).toFixed(2);
+
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Resumo das Medições:', 14, 50);
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`- Média de Temperatura: ${avgTemp} °C`, 16, 56);
+      doc.text(`- Média Pressão Entrada: ${avgPIn} bar`, 16, 62);
+      doc.text(`- Média Pressão Saída 1: ${avgPOut1} bar`, 16, 68);
+      doc.text(`- Média Pressão Saída 2: ${avgPOut2} bar`, 16, 74);
+      
+      // 3. Tabela de Dados (jspdf-autotable)
+      const tableColumns = [
+        { header: 'Timestamp', dataKey: 'time' },
+        { header: 'Temp (°C)', dataKey: 'temperatura' },
+        { header: 'P. Entrada (bar)', dataKey: 'pressaoEntrada' },
+        { header: 'P. Saída 1 (bar)', dataKey: 'pressaoSaida1' },
+        { header: 'P. Saída 2 (bar)', dataKey: 'pressaoSaida2' },
+        { header: 'Bobina', dataKey: 'bobinaUtilizada' },
+        { header: 'Atuador', dataKey: 'situacaoAtuador' },
+      ];
+
+      const tableRows = dataToExport.map(d => ({
+        time: d.time,
+        temperatura: d.temperatura.toFixed(2),
+        pressaoEntrada: d.pressaoEntrada.toFixed(2),
+        pressaoSaida1: d.pressaoSaida1.toFixed(2),
+        pressaoSaida2: d.pressaoSaida2.toFixed(2),
+        bobinaUtilizada: d.bobinaUtilizada,
+        situacaoAtuador: d.situacaoAtuador,
+      }));
+
+      autoTable(doc, {
+        columns: tableColumns,
+        body: tableRows,
+        startY: 80,
+        headStyles: { fillColor: [20, 184, 166] }, // Cor --accent
+        styles: { fontSize: 8 },
+        columnStyles: {
+          time: { cellWidth: 22 },
+        }
+      });
+
+      // 4. Salvar
+      doc.save(`relatorio_sensores_${Date.now()}.pdf`);
+      addDebugLog('DATA', `✅ PDF gerado com ${dataToExport.length} medições.`, null, 'info');
+
+    } catch (error) {
+      addDebugLog('ERROR', `Falha ao gerar PDF: ${error}`, error, 'critical');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  }, [sensorData, addDebugLog]);
+  // ... (após o final do useCallback de handleGeneratePdf) ...
+
+  const handleGenerateCsv = useCallback(() => {
+    setIsGeneratingCsv(true);
+    addDebugLog('PERFORMANCE', 'Iniciando geração de CSV...', null, 'info');
+
+    const dataToExport = sensorData; // Exporta *todos* os dados
+
+    if (dataToExport.length === 0) {
+      addDebugLog('ERROR', 'Nenhum dado disponível para gerar CSV.', null, 'warning');
+      setIsGeneratingCsv(false);
+      return;
+    }
+
+    // Helper robusto para tratar células do CSV
+    // Trata vírgulas, aspas e quebras de linha dentro dos dados
+    const escapeCsvCell = (cellData: string | number | undefined): string => {
+      if (cellData === null || cellData === undefined) {
+        return '';
+      }
+      const cell = String(cellData);
+      const escapedCell = cell.replace(/"/g, '""'); // Escapa aspas duplas
+      
+      // Adiciona aspas se a célula contiver vírgula, aspas ou quebra de linha
+      if (cell.includes(',') || cell.includes('"') || cell.includes('\n')) {
+        return `"${escapedCell}"`;
+      }
+      return escapedCell;
+    };
+
+    try {
+      // 1. Cabeçalhos (Personalizados)
+      const headers = [
+        'Timestamp',
+        'Hora_Formatada',
+        'Temperatura_C',
+        'Pressao_Entrada_bar',
+        'Pressao_Saida_1_bar',
+        'Pressao_Saida_2_bar',
+        'Bobina_Utilizada',
+        'Situacao_Atuador',
+        'Status'
+      ];
+      const headerRow = headers.join(',');
+
+      // 2. Linhas de Dados
+      const rows = dataToExport.map(d => {
+        const rowData = [
+          d.timestamp,
+          d.time,
+          d.temperatura.toFixed(2),
+          d.pressaoEntrada.toFixed(2),
+          d.pressaoSaida1.toFixed(2),
+          d.pressaoSaida2.toFixed(2),
+          d.bobinaUtilizada,
+          d.situacaoAtuador,
+          d.status
+        ];
+        return rowData.map(escapeCsvCell).join(',');
+      });
+
+      // 3. Montagem do CSV
+      const csvContent = [headerRow, ...rows].join('\n');
+
+      // 4. Criação do Blob e Download
+      // \uFEFF é o Byte Order Mark (BOM) para garantir compatibilidade UTF-8 no Excel
+      const blob = new Blob(['\uFEFF' + csvContent], {
+        type: 'text/csv;charset=utf-8;',
+      });
+      
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `relatorio_sensores_completo_${Date.now()}.csv`);
+      link.style.visibility = 'hidden';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      addDebugLog('DATA', `✅ CSV gerado com ${dataToExport.length} medições.`, null, 'info');
+
+    } catch (error) {
+      addDebugLog('ERROR', `Falha ao gerar CSV: ${error}`, error, 'critical');
+    } finally {
+      setIsGeneratingCsv(false);
+    }
+  }, [sensorData, addDebugLog]);
 const handleTestData = useCallback(() => {
   // ✅ DADOS MOCKADOS DINÂMICOS
   const randomBobina = Math.random() > 0.5 ? "Direita" : "Esquerda";
@@ -1495,7 +1673,7 @@ const handleTestData = useCallback(() => {
   // ========== STYLES ==========
   const styles = `
     :root {
-    --base-font-size: ${fontSize}px;
+    font-size: ${fontSize}px;
     --bg: ${darkMode ? '#000000' : '#ffffff'};
     --panel: ${darkMode ? '#0a0a0a' : '#f8fafc'};
     --card: ${darkMode ? '#1a1a1a' : '#ffffff'};
@@ -1517,9 +1695,6 @@ const handleTestData = useCallback(() => {
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
-    html {
-        font-size: var(--base-font-size);
-      }
     body, #root { 
       font-size: 1rem; /* Agora relativo ao --base-font-size */
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -2261,7 +2436,7 @@ const handleTestData = useCallback(() => {
       max-height: 450px;
       overflow-y: auto;
       font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', Consolas, monospace;
-      font-size: 13px;
+      font-size: 0.8125rem;
     }
 
     .debug-content::-webkit-scrollbar {
@@ -2301,7 +2476,7 @@ const handleTestData = useCallback(() => {
 
     .debug-timestamp {
       color: var(--muted);
-      font-size: 11px;
+      font-size: 0.6875rem;
       min-width: 90px;
       padding-top: 3px;
       font-weight: 500;
@@ -2309,7 +2484,7 @@ const handleTestData = useCallback(() => {
 
     .debug-type {
       font-weight: 800;
-      font-size: 10px;
+      font-size: 0.625rem;
       padding: 4px 8px;
       border-radius: 6px;
       min-width: 90px;
@@ -2340,7 +2515,7 @@ const handleTestData = useCallback(() => {
       background: var(--panel);
       border-radius: 8px;
       border: 1px solid var(--border);
-      font-size: 11px;
+      font-size: 0.6875rem;
       color: var(--muted);
       white-space: pre-wrap;
       overflow-x: auto;
@@ -2562,7 +2737,7 @@ const handleTestData = useCallback(() => {
             fontWeight: 800, 
             marginBottom: 12, 
             color: '#14b8a6',
-            fontSize: '1rem',
+            fontSize: 16,
             borderBottom: '1px solid #374151',
             paddingBottom: 8
           }}>
@@ -2571,7 +2746,7 @@ const handleTestData = useCallback(() => {
           {payload.map((entry: any, i: number) => (
             <div key={i} style={{ 
               color: entry.color, 
-              fontSize: '0.9rem',
+              fontSize: 16,
               marginBottom: 4,
               display: 'flex',
               justifyContent: 'space-between',
@@ -2663,15 +2838,6 @@ const handleTestData = useCallback(() => {
               <connectionStatus.icon size={18} />
               {connectionStatus.text}
             </div>
-
-            <div className="toggle-container">
-              <span className="toggle-label">URL Config</span>
-              <div 
-                className={`toggle-switch ${showUrlConfig ? 'active' : ''}`}
-                onClick={() => setShowUrlConfig(!showUrlConfig)}
-              />
-            </div>
-
             <div className="toggle-container">
               <span className="toggle-label">Alertas</span>
               <div 
@@ -2691,11 +2857,6 @@ const handleTestData = useCallback(() => {
             <button onClick={handleSwitchUrl} className="btn btn-secondary btn-small" disabled={wsConfig.urls.length <= 1}>
               <Globe size={14} />
               Troca URL
-            </button>
-
-            <button onClick={handleTestData} className="btn btn-warning">
-              <Database size={16} />
-              Dados Mockados
             </button>
 
             <button 
@@ -2762,6 +2923,22 @@ const handleTestData = useCallback(() => {
               >
                 <Type size={12} />
               </button>
+              <button 
+              onClick={handleGeneratePdf} 
+              className="btn btn-secondary"
+              disabled={isGeneratingPdf || sensorData.length === 0}
+            >
+              <Download size={16} />
+              {isGeneratingPdf ? 'Gerando...' : 'Gerar PDF (Últimas 20)'}
+            </button>
+            <button 
+              onClick={handleGenerateCsv} 
+              className="btn btn-secondary"
+              disabled={isGeneratingCsv || sensorData.length === 0}
+            >
+              <FileText size={16} />
+              {isGeneratingCsv ? 'Gerando...' : 'Gerar CSV (Todos)'}
+            </button>
           </div>
         </div>
         </div>
@@ -2957,7 +3134,7 @@ const handleTestData = useCallback(() => {
                 justifyContent: 'center',
                 gap: '12px',
                 marginBottom: '20px',
-                fontSize: '1.2rem',
+                fontSize: 19.2,
                 fontWeight: 700,
                 color: 'var(--text)'
               }}>
@@ -3042,7 +3219,7 @@ const handleTestData = useCallback(() => {
         left: '50%',
         transform: 'translateX(-50%)',
         color: '#4ade80',
-        fontSize: '18px',
+        fontSize: 18,
         fontWeight: 'bold',
         display: 'flex',
         alignItems: 'center',
@@ -3103,7 +3280,7 @@ const handleTestData = useCallback(() => {
             justifyContent: 'center',
             alignItems: 'center',
             color: 'white',
-            fontSize: '24px',
+            fontSize: 24,
             fontWeight: 'bold',
             position: 'relative',
             overflow: 'hidden'
@@ -3121,13 +3298,13 @@ const handleTestData = useCallback(() => {
             }} />
             
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '20px', marginBottom: '8px' }}>
+              <div style={{ fontSize: 20, marginBottom: '8px' }}>
                 🔧 Simulação Visual
               </div>
-              <div style={{ fontSize: '16px', opacity: 0.9 }}>
+              <div style={{ fontSize: 16, opacity: 0.9 }}>
                 Válvula: {videoName}
               </div>
-              <div style={{ fontSize: '14px', opacity: 0.7, marginTop: '4px' }}>
+              <div style={{ fontSize: 14, opacity: 0.7, marginTop: '4px' }}>
                 Estado: {currentData.situacaoAtuador || 'Retraído'}
               </div>
             </div>
@@ -3137,7 +3314,7 @@ const handleTestData = useCallback(() => {
               position: 'absolute',
               bottom: '10px',
               right: '10px',
-              fontSize: '12px',
+              fontSize: 12,
               opacity: 0.6,
               background: 'rgba(0,0,0,0.5)',
               padding: '4px 8px',
@@ -3156,7 +3333,7 @@ const handleTestData = useCallback(() => {
         left: '50%',
         transform: 'translateX(-50%)',
         color: '#4ade80',
-        fontSize: '16px',
+        fontSize: 16,
         fontWeight: 'bold',
         background: 'rgba(74, 222, 128, 0.1)',
         padding: '8px 16px',
@@ -3180,7 +3357,7 @@ const handleTestData = useCallback(() => {
                 border: `2px solid ${currentData.comutacaoValvula === 1 ? '#22c55e' : '#ef4444'}`,
                 color: currentData.comutacaoValvula === 1 ? '#22c55e' : '#ef4444',
                 fontWeight: 700,
-                fontSize: '1.1rem'
+                fontSize: 17.6
               }}>
                 {currentData.bobinaUtilizada} | {currentData.situacaoAtuador}
               </div>
@@ -3316,6 +3493,7 @@ const handleTestData = useCallback(() => {
                   </ResponsiveContainer>
                 </div>
               </div>
+
               {/* Gráfico Pressão Saída 1 */}
               <div className="chart-card">
                 <div className="chart-header">
@@ -3417,63 +3595,14 @@ const handleTestData = useCallback(() => {
                   </ResponsiveContainer>
                 </div>
               </div>
-              {/* Tempo de Comutação da Válvula */}
-<div className="chart-card">
-  <div className="chart-header">
-    <div className="chart-title">
-      <Clock size={20} color="#f59e0b" />
-      Tempo de Comutação da Válvula
-    </div>
-    <div className="chart-meta">
-      {sensorData.length} Amostras<br />
-      Média: {(sensorData.reduce((sum, d) => sum + d.tempoComutacao, 0) / sensorData.length).toFixed(1)}ms
-    </div>
-  </div>
-  <div className="chart-container">
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={sensorData}>
-        <defs>
-          <linearGradient id="comutacaoGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8} />
-            <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.3} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-        <XAxis 
-          dataKey="time" 
-          stroke="#9ca3af" 
-          fontSize={11}
-          axisLine={false}
-          tickLine={false}
-        />
-        <YAxis 
-          stroke="#9ca3af" 
-          fontSize={11}
-          axisLine={false}
-          tickLine={false}
-          label={{ value: 'Tempo (ms)', angle: -90, position: 'insideLeft' }}
-        />
-        <Tooltip content={<CustomTooltip />} />
-        <ReferenceLine y={50} stroke="#22c55e" strokeDasharray="5 5" label="Ótimo" />
-        <ReferenceLine y={100} stroke="#f59e0b" strokeDasharray="5 5" label="Limite" />
-        <Bar
-          dataKey="tempoComutacao"
-          fill="url(#comutacaoGradient)"
-          name="Tempo Comutação (ms)"
-          isAnimationActive={false}
-          radius={[8, 8, 0, 0]}
-        />
-      </BarChart>
-    </ResponsiveContainer>
-  </div>
-</div>
 
+ 
               <LineChart data={sensorData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                 <XAxis 
                   dataKey="time" 
                   stroke="#9ca3af" 
-                  fontSize={11}
+                  fontSize={1}
                   axisLine={false}
                   tickLine={false}
                 />
